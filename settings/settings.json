@@ -1,0 +1,21 @@
+{
+    "theme": "dark",
+    "modelSettings": {
+        "claude-opus-5": {
+            "effortLevel": "medium"
+        }
+    },
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "~/.claude/hooks/block-git-writes.sh"
+                    }
+                ]
+            }
+        ]
+    }
+}
