@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Apply a table of Python identifier renames, rewriting NAME tokens only.
+"""
+Apply a table of Python identifier renames, rewriting NAME tokens only.
 
 String literals and comments are left alone, so a JSON key, a log field, a metric
 name or a SQL alias that happens to spell a renamed identifier survives untouched.
@@ -47,7 +48,9 @@ def python_files(roots: list[Path], excludes: list[str]) -> list[Path]:
 
 
 def function_spans(source: str) -> dict[str, tuple[int, int]]:
-    """Every function and method, by dotted name, as a 1-based inclusive line span."""
+    """
+    Every function and method, by dotted name, as a 1-based inclusive line span.
+    """
     spans: dict[str, tuple[int, int]] = {}
 
     def walk(node: ast.AST, prefix: str) -> None:
@@ -56,14 +59,19 @@ def function_spans(source: str) -> dict[str, tuple[int, int]]:
                 walk(child, f"{prefix}{child.name}.")
             elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 start = min([child.lineno] + [d.lineno for d in child.decorator_list])
-                spans[f"{prefix}{child.name}"] = (start, child.end_lineno or child.lineno)
+                spans[f"{prefix}{child.name}"] = (
+                    start,
+                    child.end_lineno or child.lineno,
+                )
                 walk(child, f"{prefix}{child.name}.")
 
     walk(ast.parse(source), "")
     return spans
 
 
-def resolve_span(spans: dict[str, tuple[int, int]], name: str) -> tuple[int, int] | None:
+def resolve_span(
+    spans: dict[str, tuple[int, int]], name: str
+) -> tuple[int, int] | None:
     if name in spans:
         return spans[name]
     matches = [key for key in spans if key.rsplit(".", 1)[-1] == name]
@@ -79,21 +87,29 @@ def load_table(path: Path) -> list[tuple[str, str, str]]:
         if len(parts) != 3:
             sys.exit(f"{path}:{number}: want 3 tab-separated fields, got {len(parts)}")
         scope, old, new = (part.strip() for part in parts)
-        if not scope.startswith("expr:") and not (old.isidentifier() and new.isidentifier()):
+        if not scope.startswith("expr:") and not (
+            old.isidentifier() and new.isidentifier()
+        ):
             sys.exit(f"{path}:{number}: not an identifier pair: {old!r} -> {new!r}")
         rows.append((scope, old, new))
 
     seen: dict[tuple[str, str], str] = {}
     for scope, old, new in rows:
         if (scope, old) in seen:
-            sys.exit(f"{path}: {scope} renames {old} twice: {seen[(scope, old)]} and {new}")
+            sys.exit(
+                f"{path}: {scope} renames {old} twice: {seen[(scope, old)]} and {new}"
+            )
         seen[(scope, old)] = new
 
     # A new name that is also some other row's old name chains in a single pass.
     identifiers = [row for row in rows if not row[0].startswith("expr:")]
-    chained = sorted({new for _, _, new in identifiers} & {old for _, old, _ in identifiers})
+    chained = sorted(
+        {new for _, _, new in identifiers} & {old for _, old, _ in identifiers}
+    )
     if chained:
-        sys.exit(f"{path}: these new names are also old names, so they would chain: {chained}")
+        sys.exit(
+            f"{path}: these new names are also old names, so they would chain: {chained}"
+        )
     return rows
 
 
@@ -106,12 +122,115 @@ def applies(scope: str, relative: str) -> bool:
     return relative.startswith(target) if target.endswith("/") else target == relative
 
 
+def line_offsets(source: str) -> list[int]:
+    """
+    Character offset at which each 1-based line starts.
+    """
+    offsets = [0]
+    for line in source.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    return offsets
+
+
+class FileRewriter:
+    """
+    One file's pending rewrite: its text, plus the table rows already scoped to it.
+
+    Each pass advances `source` and accumulates `edits` and the rows in `matched`.
+    """
+
+    def __init__(self, source: str, rows: list[tuple[str, str, str]]) -> None:
+        self.source = source
+        self.rows = rows
+        self.edits = 0
+        self.matched: set[tuple[str, str, str]] = set()
+        self._spans: dict[str, tuple[int, int]] | None = None
+
+    @property
+    def spans(self) -> dict[str, tuple[int, int]]:
+        """
+        Function spans, parsed on first use so a table with no `::` row never parses.
+        """
+        if self._spans is None:
+            self._spans = function_spans(self.source)
+        return self._spans
+
+    def winning_row(
+        self, candidates: list[tuple[str, str, str]], line: int
+    ) -> tuple[str, str, str] | None:
+        """
+        The first row, in table order, whose scope covers this line.
+        """
+        for row in candidates:
+            scope = row[0]
+            if "::" not in scope:
+                return row
+            span = resolve_span(self.spans, scope.split("::", 1)[1])
+            if span and span[0] <= line <= span[1]:
+                return row
+        return None
+
+    def rewrite_identifiers(self) -> None:
+        """
+        Rewrite NAME tokens, leaving strings and comments as the tokenizer found them.
+        """
+        candidates: dict[str, list[tuple[str, str, str]]] = {}
+        for row in self.rows:
+            if not row[0].startswith("expr:"):
+                candidates.setdefault(row[1], []).append(row)
+        if not candidates:
+            return
+
+        offsets = line_offsets(self.source)
+        pieces: list[str] = []
+        cursor = 0
+        for token in tokenize.generate_tokens(io.StringIO(self.source).readline):
+            if token.type != tokenize.NAME:
+                continue
+            row = self.winning_row(candidates.get(token.string, []), token.start[0])
+            if row is None:
+                continue
+            start = offsets[token.start[0] - 1] + token.start[1]
+            end = offsets[token.end[0] - 1] + token.end[1]
+            pieces.append(self.source[cursor:start])
+            pieces.append(row[2])
+            cursor = end
+            self.edits += 1
+            self.matched.add(row)
+
+        if pieces:
+            pieces.append(self.source[cursor:])
+            self.source = "".join(pieces)
+
+    def rewrite_expressions(self) -> None:
+        """
+        Replace literal text for `expr:` rows, strings and comments included.
+        """
+        for row in self.rows:
+            scope, old, new = row
+            if scope.startswith("expr:") and old in self.source:
+                self.edits += self.source.count(old)
+                self.source = self.source.replace(old, new)
+                self.matched.add(row)
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("table", type=Path)
-    parser.add_argument("--root", action="append", type=Path, default=None, help="repeatable; default .")
-    parser.add_argument("--exclude", action="append", default=[], help="glob of files to leave alone; repeatable")
-    parser.add_argument("--apply", action="store_true", help="write the changes; default is a dry run")
+    parser.add_argument(
+        "--root", action="append", type=Path, default=None, help="repeatable; default ."
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="glob of files to leave alone; repeatable",
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="write the changes; default is a dry run"
+    )
     args = parser.parse_args()
 
     table = load_table(args.table)
@@ -126,62 +245,16 @@ def main() -> int:
         if not rows:
             continue
 
-        source = path.read_text()
-        edits = 0
+        rewriter = FileRewriter(path.read_text(), rows)
+        rewriter.rewrite_identifiers()
+        rewriter.rewrite_expressions()
+        matched |= rewriter.matched
 
-        identifier_rows = [row for row in rows if not row[0].startswith("expr:")]
-        if identifier_rows:
-            by_old: dict[str, list[tuple[str, str]]] = {}
-            for scope, old, new in identifier_rows:
-                by_old.setdefault(old, []).append((scope, new))
-            spans = function_spans(source) if any("::" in s for s, _, _ in identifier_rows) else {}
-
-            lines = source.splitlines(keepends=True)
-            starts = [0]
-            for line in lines:
-                starts.append(starts[-1] + len(line))
-
-            pieces: list[str] = []
-            cursor = 0
-            for token in tokenize.generate_tokens(io.StringIO(source).readline):
-                if token.type != tokenize.NAME or token.string not in by_old:
-                    continue
-                chosen = None
-                for scope, new in by_old[token.string]:
-                    if "::" not in scope:
-                        chosen = new
-                        break
-                    span = resolve_span(spans, scope.split("::", 1)[1])
-                    if span and span[0] <= token.start[0] <= span[1]:
-                        chosen = new
-                        break
-                if chosen is None:
-                    continue
-                start = starts[token.start[0] - 1] + token.start[1]
-                end = starts[token.end[0] - 1] + token.end[1]
-                pieces.append(source[cursor:start])
-                pieces.append(chosen)
-                cursor = end
-                edits += 1
-                for scope, new in by_old[token.string]:
-                    if new == chosen:
-                        matched.add((scope, token.string, new))
-                        break
-            if edits:
-                pieces.append(source[cursor:])
-                source = "".join(pieces)
-
-        for scope, old, new in rows:
-            if scope.startswith("expr:") and old in source:
-                edits += source.count(old)
-                source = source.replace(old, new)
-                matched.add((scope, old, new))
-
-        if edits:
-            total += edits
-            print(f"{relative}: {edits}")
+        if rewriter.edits:
+            total += rewriter.edits
+            print(f"{relative}: {rewriter.edits}")
             if args.apply:
-                path.write_text(source)
+                path.write_text(rewriter.source)
 
     unmatched = [row for row in table if row not in matched]
     if unmatched:
