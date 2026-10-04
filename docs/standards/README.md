@@ -30,6 +30,13 @@ rules they replace.
 | [ci-pipeline.md](ci-pipeline.md)                       | `ci.yml`, per-area checks, setup action, image publishing        |
 | [git-workflow.md](git-workflow.md)                     | Branch names, commit messages, PR titles and template            |
 
+## Python
+
+Python backends have their own set in [python/](python/README.md): Python, FastAPI,
+Pydantic, SQLAlchemy, Alembic, Beautiful Soup, NLTK, httpx, and pytest. The
+[relational-databases.md](relational-databases.md) and [postgresql.md](postgresql.md)
+rules apply to them too, except where a Python document names a rule it replaces.
+
 ## Conventions used in these documents
 
 **Example domain.** Examples use one illustrative domain so they read consistently:
