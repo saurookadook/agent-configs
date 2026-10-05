@@ -21,15 +21,15 @@ HOST = "news.example.com"
 
 
 def fetch(url: str) -> str:
-    """Retrieves a page. Raises ``FetchError`` if it cannot be read."""
+    """Fetch a page, raising ``FetchError`` if it cannot be read."""
 
 
 def parse_article_html(html: str) -> dict[str, Any]:
-    """Extracts an article payload from a page. Raises ``ScrapeError``."""
+    """Extract an article payload, or raise ``ScrapeError``."""
 
 
 def scrape(url: str) -> dict[str, Any]:
-    """Fetches and parses an article, returning a payload ready to store."""
+    """Fetch and parse an article into a payload ready to store."""
     payload = parse_article_html(fetch(url))
     payload["source_url"] = url
     return payload
@@ -41,7 +41,7 @@ except a documented default), so it can be tested on saved pages.
 **SOUP-2 — Route URLs to site modules through a registry keyed by normalized host**
 (`services/<thing>_source.py`): lowercase the host, strip any port, userinfo, and a
 leading `www.`, and look it up in `_PARSERS` / `_FETCHERS`. An unknown host raises
-`UnsupportedSource` listing the supported hosts. Adding a site is a new module and one
+`UnsupportedSourceError` listing the supported hosts. Adding a site is a new module and one
 registry entry.
 
 ---
@@ -117,7 +117,7 @@ it before use. Read attributes with `.get("datetime")`, never `["datetime"]`. Ex
 text through one helper:
 
 ```python
-def _text_or_none(element: Any) -> Optional[str]:
+def _text_or_none(element: Tag | None) -> str | None:
     if element is None:
         return None
     text = element.get_text(" ", strip=True)

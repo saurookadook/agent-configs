@@ -5,8 +5,10 @@ migration in `db/migrations/versions/`. General schema-change rules are in
 [../relational-databases.md](../relational-databases.md) (RDB-31 to RDB-35); the models
 autogenerate reads are in [sqlalchemy.md](sqlalchemy.md).
 
-**Stack:** Alembic with autogenerate against `BaseDB.metadata`, and GeoAlchemy2's Alembic
-helpers when the schema has PostGIS columns.
+**Stack:** Alembic 1.20 (`alembic>=1.20,<1.21`) with autogenerate against
+`BaseDB.metadata`, and GeoAlchemy2's Alembic helpers when the schema has PostGIS columns.
+The evidence behind these rules is in
+[SQLAlchemy and Alembic best practices](../../research/python/sqlalchemy-alembic-best-practices.md).
 
 ---
 
@@ -18,14 +20,27 @@ helpers when the schema has PostGIS columns.
 [alembic]
 script_location = db/migrations
 file_template = %%(year)d_%%(month).2d_%%(day).2d_%%(hour).2d%%(minute).2d-%%(rev)s_%%(slug)s
-version_path_separator = os
-sqlalchemy.url = postgresql+psycopg2://placeholder/overridden-in-env-py
+path_separator = os
+timezone = UTC
+
+[post_write_hooks]
+hooks = ruff_fix, ruff_format
+ruff_fix.type = module
+ruff_fix.module = ruff
+ruff_fix.options = check --fix REVISION_SCRIPT_FILENAME
+ruff_format.type = module
+ruff_format.module = ruff
+ruff_format.options = format REVISION_SCRIPT_FILENAME
 ```
 
-The file template produces sortable names
-(`2026_08_21_1018-7d3ea6c4b915_add_owner_id_to_projects_table.py`). `sqlalchemy.url`
-here is never used for a real connection and MUST NOT contain real credentials;
-`env.py` replaces it (ALEM-2).
+- The file template produces sortable names
+  (`2026_08_21_1018-7d3ea6c4b915_add_owner_id_to_projects_table.py`), stamped in UTC.
+- `path_separator` replaces `version_path_separator` (Alembic 1.16); without it Alembic
+  keeps its legacy path splitting.
+- The Ruff hooks fix and format each new revision (python.md PY-8), including removing the
+  unused imports of an empty one.
+- The file has no `sqlalchemy.url`: `env.py` builds its engine from the application's URL
+  (ALEM-2), so no credentials or placeholders live here.
 
 **ALEM-2 — `db/migrations/env.py` takes its URL and metadata from the application:**
 
@@ -33,29 +48,57 @@ here is never used for a real connection and MUST NOT contain real credentials;
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-target_metadata = BaseDB.metadata
+target_metadata: MetaData = BaseDB.metadata
 
-config.set_main_option("sqlalchemy.url", DBSessionManager.build_psql_url())
+
+def run_migrations_online() -> None:
+    """Migrate through a dedicated connection with a short lock wait."""
+    engine = create_engine(DBSessionManager.build_psql_url(), poolclass=pool.NullPool)
+    with engine.connect() as connection:
+        connection.execute(text("SET lock_timeout = '5s'"))
+        connection.commit()  # a session-level SET outlives each migration's commit
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_server_default=True,
+            transaction_per_migration=True,
+            include_object=alembic_helpers.include_object,
+            process_revision_directives=alembic_helpers.writer,
+            render_item=alembic_helpers.render_item,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
 ```
 
 - Import every model module (SQLA-13); a model that is not imported is invisible to
   autogenerate.
 - Pass `disable_existing_loggers=False`: the test suite runs migrations from inside a
   process whose application loggers already exist, and the default would silence them.
+- Build the engine from the URL; do not pass it through
+  `config.set_main_option("sqlalchemy.url", ...)`, whose config parser treats `%` as
+  interpolation, so a URL-encoded password breaks it.
 - Connect with `poolclass=pool.NullPool` in online mode.
-- Pass `compare_server_default=True` to `context.configure` so autogenerate notices
-  changed defaults. (Type comparison is on by default.)
+- Pass `compare_server_default=True` so autogenerate notices changed defaults (type
+  comparison is on by default). On PostgreSQL it compares on the server and raised no
+  false positives in testing.
+- Pass `transaction_per_migration=True`, in offline mode too. Each revision then commits
+  on its own, so an enum value one migration adds is usable in the next (ALEM-11), and a
+  failure leaves the earlier revisions applied and recorded.
+- `SET lock_timeout` makes a DDL statement fail after five seconds instead of queuing
+  behind a long transaction while application queries queue behind it; rerun the step.
 - With PostGIS, also pass GeoAlchemy2's `include_object`, `process_revision_directives`
   (`alembic_helpers.writer`), and `render_item`, in both offline and online mode, so
   spatial indexes are not generated twice.
 
-**ALEM-3 — Keep the revision template (`script.py.mako`) typed and documented:**
+**ALEM-3 — Keep the revision template (`script.py.mako`) typed and documented,** in the
+same syntax as application code (PY-18): `X | None` unions, with `Sequence` imported from
+`collections.abc`, in place of the `typing.Union` form Alembic's template generates:
 
 ```python
 revision: str = ${repr(up_revision)}
-down_revision: Union[str, Sequence[str], None] = ${repr(down_revision)}
-branch_labels: Union[str, Sequence[str], None] = ${repr(branch_labels)}
-depends_on: Union[str, Sequence[str], None] = ${repr(depends_on)}
+down_revision: str | Sequence[str] | None = ${repr(down_revision)}
+branch_labels: str | Sequence[str] | None = ${repr(branch_labels)}
+depends_on: str | Sequence[str] | None = ${repr(depends_on)}
 
 
 def upgrade() -> None:
@@ -103,7 +146,12 @@ One migration covers one logical change. Do not bundle unrelated tables.
   new_column_name=...)`)
 - constraint and index names wrapped in `op.f(...)`, which marks them as already
   following the naming convention (SQLA-3)
-- enum types created before the tables that use them and dropped after (ALEM-11)
+- enum types created before the tables that use them and dropped after (ALEM-11). An
+  enum type that `create_table` creates implicitly is not dropped by the autogenerated
+  `downgrade()`, and the next upgrade then fails with "type already exists"
+- changes autogenerate cannot see, which you write by hand: renamed tables and columns,
+  added or removed enum values, an edited `CHECK` expression, sequences, and constraints
+  without names
 - a type change on a column with data that needs `postgresql_using=` to cast
 - a `NOT NULL` column added to a table with rows, which needs a `server_default` or a
   backfill step (ALEM-12)
@@ -142,29 +190,55 @@ PROJECT_STATUS_VALUES = ["active", "archived", "draft"]
 
 
 def upgrade() -> None:
-    project_status = create_pg_enum("project_statuses", PROJECT_STATUS_VALUES)
-    op.add_column("projects", sa.Column("status", project_status, nullable=False, server_default="draft"))
+    project_status = create_pg_enum("project_status", PROJECT_STATUS_VALUES)
+    op.add_column(
+        "projects",
+        sa.Column("status", project_status, nullable=False, server_default="draft"),
+    )
 
 
 def downgrade() -> None:
     op.drop_column("projects", "status")
-    drop_pg_enum("project_statuses", PROJECT_STATUS_VALUES)
+    drop_pg_enum("project_status", PROJECT_STATUS_VALUES)
 ```
 
-To add a value, use `op.execute("ALTER TYPE project_statuses ADD VALUE 'paused'")`, and
-use the new value only in a later migration. To remove or rename values, create a new
-type, cast the column with a `CASE` mapping, drop the old type, and rename the new one.
+- Name types in singular snake_case (PG-5). Refer to an existing type as
+  `PROJECT_STATUS: sa.Enum = postgresql.ENUM(name="project_status", create_type=False)`;
+  the annotation gives pyright a known type, since `postgresql.ENUM`'s constructor is
+  unannotated.
+- To add a value, call a helper that runs
+  `ALTER TYPE project_status ADD VALUE IF NOT EXISTS 'paused'` inside
+  `op.get_context().autocommit_block()`. PostgreSQL cannot use a new value until the
+  transaction that added it commits; the block commits it, so a backfill after it can use
+  the value. The block also commits everything before it in that migration, and
+  `IF NOT EXISTS` makes a rerun safe if a later step fails. Alembic requires
+  `transaction_per_migration=True` with it (ALEM-2).
+- To remove or rename values, rename the old type to `<name>_old`, create the new type,
+  then for each column drop its default, `ALTER COLUMN ... TYPE <name> USING
+  <column>::text::<name>` (with a `CASE` mapping for renamed values), restore the default,
+  and finally drop `<name>_old`. A default typed with the old enum cannot be cast, so the
+  `ALTER` fails unless the default is dropped first.
+- Do not add the third-party alembic-postgresql-enum: it automates the above, but its
+  generated calls need type-checker suppressions (PY-10).
 
 **ALEM-12 — Separate schema changes from data changes** (RDB-34, RDB-35). A data backfill
 is its own migration using `op.execute(sa.text(...))` with bound parameters, or
 `op.bulk_insert(sa.table(...), rows)` against a table literal declared in the migration.
 Development sample data belongs in `scripts/db/seeding/`, never in a migration.
 
+- A table literal types an enum column as the enum (ALEM-11's `sa.Enum` variable), never
+  `sa.String`: psycopg 3 sends a string-typed value as `varchar`, and PostgreSQL refuses to
+  compare it with the enum, although `alembic upgrade --sql` output looks correct.
+- A backfill too large to run inside one deploy step is a script run outside the
+  migration chain (Alembic's cookbook: migrations are designed for schema changes).
+
 ---
 
 ## Running migrations
 
-**ALEM-13 — Apply migrations as a separate step, never at application startup:**
+**ALEM-13 — Apply migrations as a separate step, never at application startup.** Alembic
+takes no lock on its version table, so exactly one process migrates a database at a
+time:
 
 | Database    | How                                                                  |
 | ----------- | -------------------------------------------------------------------- |
@@ -178,6 +252,13 @@ migrations themselves are what create the schema. An initialization script MAY u
 `alembic stamp head`, and the test suite's `upgrade head` remains the check that the
 migration chain produces the same schema.
 
-**ALEM-14 — CI fails if the models and migrations disagree.** Run `uv run alembic check`
-against a migrated test database; it exits non-zero when autogenerate would produce a new
-migration.
+**ALEM-14 — CI checks the migration chain against a real PostgreSQL database:**
+
+- `uv run alembic check` against a migrated test database exits non-zero when
+  autogenerate would produce a new migration. It shares autogenerate's blind spots
+  (ALEM-6), so it does not replace review.
+- A test asserts one head:
+  `len(ScriptDirectory.from_config(config).get_heads()) == 1` (ALEM-10).
+- A test runs `command.downgrade(config, "base")` then `command.upgrade(config, "head")`
+  on the test database. The round trip catches a downgrade that leaves an enum type or
+  another object behind (ALEM-8), which neither pyright nor `alembic check` can see.

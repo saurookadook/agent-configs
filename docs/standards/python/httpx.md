@@ -32,12 +32,12 @@ wrapping; it exposes one keyword-only function per endpoint and routes them thro
 private `_get` / `_post` / `_send` helpers:
 
 ```python
-"""
-The one place the Tasks API is spoken to.
+"""The one place the Tasks API is spoken to.
 
-Each function returns the decoded body untouched. Reshaping a response is the
-caller's job; this module's only opinion is that a failed call raises
-``TasksAPIError`` rather than returning something falsy.
+Each function returns the decoded body untouched. Reshaping a
+response is the caller's job; this module's only opinion is that a
+failed call raises ``TasksAPIError`` rather than returning something
+falsy.
 """
 
 BASE_URL = "https://api.tasks.example.com"
@@ -49,7 +49,11 @@ def get_project_summary(*, external_id: str, months: int = 12) -> dict[str, Any]
 
 
 def search_tasks(*, external_id: str, offset: int, page_size: int = 10) -> dict[str, Any]:
-    """``offset`` counts records, not pages: pass ``page_index * page_size``."""
+    """Search a project's tasks, one page at a time.
+
+    ``offset`` counts records, not pages: pass
+    ``page_index * page_size``.
+    """
     return _post(
         "/tasks/search",
         {"project": external_id, "pagination": {"offset": offset, "page_size": page_size}},
@@ -97,7 +101,10 @@ is used:
 
 ```python
 def _headers() -> dict[str, str]:
-    return {"Content-Type": "application/json", "x-api-key": EnvVarManager().env_vars.tasks_api_key}
+    return {
+        "Content-Type": "application/json",
+        "x-api-key": EnvVarManager().env_vars.tasks_api_key.get_secret_value(),
+    }
 ```
 
 Log the method and path of each call at `info`, and parameters only when they contain no
@@ -113,7 +120,7 @@ def _client() -> httpx.Client:
 
 
 def close() -> None:
-    """Closes the pooled client. Called from the FastAPI lifespan on shutdown."""
+    """Close the pooled client (called by the lifespan on shutdown)."""
     if _client.cache_info().currsize:
         _client().close()
         _client.cache_clear()
@@ -144,7 +151,7 @@ endpoint, retries MAY be enabled for connection failures only with
   built on `httpx.MockTransport`:
 
 ```python
-def test_wraps_server_errors(mocker):
+def test_wraps_server_errors(mocker: MockerFixture) -> None:
     transport = httpx.MockTransport(lambda request: httpx.Response(503, json={}))
     mocker.patch(
         "services.tasks_api._client",

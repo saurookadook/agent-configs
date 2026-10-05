@@ -123,7 +123,10 @@ _ANALYZER = SentimentIntensityAnalyzer()
 
 
 def score_text(raw_text: str) -> float:
-    """Mean VADER compound score over the text's sentences, from -1.0 to 1.0."""
+    """Return the mean VADER compound score of the text's sentences.
+
+    Scores run from -1.0 (most negative) to 1.0 (most positive).
+    """
     sentences = sent_tokenize(raw_text, language="english")
     if not sentences:
         return 0.0

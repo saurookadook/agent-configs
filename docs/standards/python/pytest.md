@@ -39,12 +39,14 @@ log_cli = true
 log_cli_level = NOTSET
 norecursedirs = .*
 python_files = test_*.py test.py
+strict = true
 required_plugins = pytest-mock>=3.14.0,<4.0.0
                    pytest-sugar>=1.0.0,<2.0.0
                    pytest-xdist>=3.5.0,<4.0.0
 ```
 
-The CI file drops `-vvv` and live logging and adds coverage (PYTEST-22). Every option a
+`strict = true` (pytest 9) turns unknown markers, unknown configuration keys, and
+unexpectedly passing `xfail` tests into failures. The CI file drops `-vvv` and live logging and adds coverage (PYTEST-22). Every option a
 CI flag needs (`--cov`) MUST come from a plugin in the dev group, or the run fails at
 startup.
 
@@ -100,13 +102,22 @@ imports:**
 
 ```python
 class TestProjectFacade:
-    def test_get_one_by_id(self, project_facade, project_record, expected_project_dict): ...
-    def test_get_one_by_id_no_result(self, project_facade): ...
+    def test_get_one_by_id(
+        self,
+        project_facade: ProjectFacade,
+        project_record: ProjectDB,
+        expected_project_dict: dict[str, Any],
+    ) -> None: ...
+
+    def test_get_one_by_id_no_result(self, project_facade: ProjectFacade) -> None: ...
 
 
 class TestCreateProjectFromTemplate:
-    def test_copies_the_template_tasks(self, test_app_client, template_record): ...
-    def test_resubmitting_the_same_template_updates_in_place(self, ...): ...
+    def test_copies_the_template_tasks(
+        self, test_app_client: TestClient, template_record: ProjectDB
+    ) -> None: ...
+
+    def test_resubmitting_the_same_template_updates_in_place(self, ...) -> None: ...
 ```
 
 Test classes (`Test<Unit>`, `Test<Unit><Aspect>`) have no `__init__` and no state; put
@@ -131,7 +142,7 @@ values:
 
 ```python
 @pytest.fixture
-def expected_project_dict(owner_record):
+def expected_project_dict(owner_record: UserDB) -> dict[str, Any]:
     return dict(
         id=UUID("44cf56a4-1f14-4a08-915f-dc40b7ef657e"),
         name="Test Project",
@@ -142,7 +153,9 @@ def expected_project_dict(owner_record):
 
 
 @pytest.fixture
-def project_record(expected_project_dict, test_db_session):
+def project_record(
+    expected_project_dict: dict[str, Any], test_db_session: Session
+) -> ProjectDB:
     project = ProjectDBFactory(**expected_project_dict)
     test_db_session.commit()
     return project
@@ -161,31 +174,37 @@ back after every test:**
 
 ```python
 # conftest.py
-EnvVarManager().env_vars.database_name = os.environ["DATABASE_NAME"] = "test_app"
+os.environ["DATABASE_NAME"] = "test_app"
+EnvVarManager().reload()  # the frozen EnvVars is re-validated, never assigned to
 
 
-def pytest_sessionstart(session):
+def pytest_sessionstart(session: pytest.Session) -> None:
     alembic_config = config.Config(os.path.join(os.path.abspath("."), "alembic.ini"))
     command.upgrade(alembic_config, "head")
 
 
 @pytest.fixture(autouse=True)
-def test_db_session():
+def test_db_session() -> Iterator[Session]:
     db_session_manager = DBSessionManager()
     scoped = db_session_manager.scoped_session
 
     with db_session_manager.engine.connect() as db_connection:
         with db_connection.begin() as transaction:
-            yield scoped(bind=db_connection)
+            yield scoped(bind=db_connection, join_transaction_mode="create_savepoint")
             transaction.rollback()
     scoped.remove()
 ```
 
 - The test database name is set before any module reads configuration, at the top of the
-  root `conftest.py`.
+  root `conftest.py`, and `EnvVarManager().reload()` re-validates the configuration in
+  case an import already read it (pydantic.md PYD-15).
 - The session is bound to a connection inside an outer transaction, so
   `test_db_session.commit()` in a test makes rows visible to later queries in that test
   without persisting them.
+- `join_transaction_mode="create_savepoint"` (SQLAlchemy's documented test-suite recipe)
+  turns each commit and rollback made by the code under test, including a route's own
+  commit and the session dependency's rollback (fastapi.md FAPI-9), into a savepoint, so
+  the test's outer transaction and its fixture rows survive until the final rollback.
 - Factories write through the same `scoped_session` (PYTEST-11), which is why they land
   in the test's transaction.
 - Never truncate tables, call `create_all`, or mock the session.
@@ -208,7 +227,7 @@ class ProjectDBFactory(
         model = ProjectDB
         sqlalchemy_session = DBSessionManager().scoped_session
 
-    id = factory.LazyFunction(uuid4)
+    id = factory.LazyFunction(uuid7)
     external_id = factory.Sequence(lambda n: n + 1)
     description = factory.Faker("text")
     name = factory.Faker("sentence", nb_words=3)
@@ -220,7 +239,8 @@ class ProjectDBFactory(
 - `metaclass=BaseMetaFactory[ProjectDB]` makes `ProjectDBFactory(...)` type as
   `ProjectDB`.
 - `TimestampsDBMixinFactory` sets `created_at` and `updated_at` to `get_mock_utcnow()`.
-- Unique columns use `factory.Sequence`; IDs use `factory.LazyFunction(uuid4)`.
+- Unique columns use `factory.Sequence`; IDs use `factory.LazyFunction(uuid7)`, matching the time-ordered IDs the database
+  generates (PG-3).
 - Fields derived from other fields use `factory.LazyAttribute`.
 - After creating records, call `test_db_session.commit()` before querying.
 
@@ -247,7 +267,7 @@ database dependency with the test session:
 
 ```python
 @pytest.fixture
-def test_app_client(test_db_session):
+def test_app_client(test_db_session: Session) -> TestClient:
     app.dependency_overrides[api_db_session] = lambda: test_db_session
     return TestClient(app, base_url="https://app.dev")
 ```
@@ -257,7 +277,9 @@ Assert the status code first, using `fastapi.status` constants, then the body un
 also query the database directly:
 
 ```python
-def test_resubmitting_the_same_url_updates_in_place(self, test_app_client, test_db_session):
+def test_resubmitting_the_same_url_updates_in_place(
+    self, test_app_client: TestClient, test_db_session: Session
+) -> None:
     first = test_app_client.post("/api/projects", json={"source_url": SOURCE_URL})
     second = test_app_client.post("/api/projects", json={"source_url": SOURCE_URL})
 
@@ -280,7 +302,7 @@ turned off:**
 
 ```python
 @pytest.fixture
-def http_requests_mock():
+def http_requests_mock() -> Iterator[requests_mock.Mocker]:
     with requests_mock.Mocker(real_http=False) as mock:
         yield mock
 ```
@@ -312,11 +334,14 @@ captures do not cover.
 
 ## Mocks and time
 
-**PYTEST-17 — Patch only at boundaries, with `mocker`,** and patch the name where it is
-looked up:
+**PYTEST-17 — Patch only at boundaries, with `mocker`,** patch the name where it is
+looked up, and pass `autospec=True` so a call with the wrong signature fails the way it
+would in production (the `unittest.mock` docs, "Where to patch" and "Autospeccing"):
 
 ```python
-mocker.patch("api.routes.exchange_rate.resolve_rate", return_value=None)
+mocker.patch(
+    "api.routes.exchange_rate.resolve_rate", autospec=True, return_value=None
+)
 ```
 
 Prefer real collaborators: the test database over a mocked facade, `requests-mock` over a
@@ -348,17 +373,21 @@ grouping the cases and boundary values on both sides of every threshold:
         (1e-07, "0.0000001"),
     ],
 )
-def test_matches_postgis_rendering(self, value, expected): ...
+def test_matches_postgis_rendering(self, value: float, expected: str) -> None: ...
 
 
 @pytest.mark.parametrize("status_code", [400, 404, 429, 500, 503])
-def test_http_errors_raise_tasks_api_error(self, http_requests_mock, status_code): ...
+def test_http_errors_raise_tasks_api_error(
+    self, http_requests_mock: requests_mock.Mocker, status_code: int
+) -> None: ...
 ```
 
 **PYTEST-20 — Assert with plain `assert`,** and:
 
 - compare floats with `pytest.approx(expected, rel=1e-6)`
-- expect errors with `pytest.raises(Error, match="part of the message")`
+- expect errors with `pytest.raises(Error, match="part of the message")`; expect a
+  Pydantic `ValidationError` by its error `type` (`string_too_short`,
+  `extra_forbidden`), not its message, which changes between Pydantic versions
 - compare Pydantic models with `==` or `model_dump()`
 - sort both sides by a key before comparing lists whose order is not part of the contract
 - compare timestamps as aware datetimes or ISO strings, never as naive values
@@ -376,3 +405,24 @@ parallel run so workers do not race to apply the same migration.
 reporting coverage with `--cov=. --cov-report=term-missing` (excluding `_tests`,
 `_factories`, `_mocks`, and `.venv` in the coverage configuration). The test image copies
 both ini files and installs the dev group.
+
+---
+
+## Types
+
+**PYTEST-23 — Type tests, fixtures, and test support like production code** (PY-18):
+
+- Every test returns `-> None`.
+- A fixture is annotated with what it provides. A `yield` fixture returns `Iterator[T]`
+  (`Iterator[Session]`, `Iterator[requests_mock.Mocker]`), and a fixture that returns a
+  function is annotated with `Callable[...]`.
+- pytest's own fixtures use their public types: `mocker: MockerFixture` (from
+  `pytest_mock`), `monkeypatch: pytest.MonkeyPatch`, `tmp_path: Path`,
+  `request: pytest.FixtureRequest`, `caplog: pytest.LogCaptureFixture`.
+- Parametrized arguments take the type of their values.
+
+pyright checks `_tests/`, `_factories/`, `_mocks/`, and every `conftest.py` with the
+same strict settings as application code (PY-9). A factory module built on a library
+without type information MAY turn off the specific `reportUnknown…` rules it triggers
+in a file-level `# pyright:` comment, the way PYTEST-11's factory turns off
+`reportIncompatibleVariableOverride` (PY-10). Test docstrings follow PYTEST-8, not PY-29.
