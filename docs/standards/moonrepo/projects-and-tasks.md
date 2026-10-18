@@ -140,6 +140,9 @@ sequence.
 - File groups merge in v2 (the concept page that says "override" is stale). Do not reuse a
   workspace group name in a project with a different meaning; set
   `workspace.mergeStrategies.fileGroups: replace` only when a project must override.
+- A negated glob in a file group applies to every input of a task that uses the group,
+  not just to that group (checked on v2.6.2). Build groups from positive globs, and use
+  negations only to drop files no task input needs.
 
 ---
 

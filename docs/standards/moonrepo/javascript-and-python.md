@@ -111,30 +111,29 @@ $schema: '../cache/schemas/tasks.json'
 inheritedBy:
   toolchains: ['python'] # the ID, not the `unstable_python` key (MLANG-8)
 fileGroups:
-  python-sources: ['**/*.py', '!tests/**/*']
-  python-tests: ['tests/**/*.py']
+  python-sources: ['**/*.py']
   python-configs: ['pyproject.toml', 'uv.lock']
 tasks:
   format:
     command: 'uv'
     args: ['run', 'ruff', 'format', '--check']
-    inputs: ['@group(python-sources)', '@group(python-tests)', '@group(python-configs)']
+    inputs: ['@group(python-sources)', '@group(python-configs)']
     options:
       affectedFiles: true
   lint:
     command: 'uv'
     args: ['run', 'ruff', 'check']
-    inputs: ['@group(python-sources)', '@group(python-tests)', '@group(python-configs)']
+    inputs: ['@group(python-sources)', '@group(python-configs)']
     options:
       affectedFiles: true
   typecheck:
     command: 'uv'
     args: ['run', 'pyright']
-    inputs: ['@group(python-sources)', '@group(python-tests)', '@group(python-configs)']
+    inputs: ['@group(python-sources)', '@group(python-configs)']
   test:
     command: 'uv'
     args: ['run', 'pytest']
-    inputs: ['@group(python-sources)', '@group(python-tests)', '@group(python-configs)']
+    inputs: ['@group(python-sources)', '@group(python-configs)']
 ```
 
 The task names match the JavaScript file, so `moon run :lint` and the pre-commit hook
@@ -144,6 +143,10 @@ the JavaScript groups (MTASK-5).
 - `inheritedBy.toolchains: ['unstable_python']` matches nothing on v2.6.2, so no project
   inherits the tasks and `moon run :lint` silently skips Python. Use `['python']`, and
   confirm with `moon task backend:lint` after a moon upgrade.
+- `python-sources` covers tests too. moon applies a negated glob (`'!tests/**/*'`) to the
+  task's whole input list, so a group that excludes tests also drops them from a task that
+  adds them back through another group, and their edits stop affecting `format` and
+  `lint`. Narrow a group with positive globs only.
 
 **MLANG-11 — Create the shared venv before tasks fan out in parallel.** On a cold
 workspace, parallel `moon ci` can race on a shared root `.venv` ("A virtual environment
