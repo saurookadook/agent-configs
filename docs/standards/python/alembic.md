@@ -125,6 +125,12 @@ docker compose run --rm backend-migrations revision --autogenerate -m "..."
 
 Commit the model change and the migration in the same commit (RDB-31).
 
+The `backend-migrations` service bind-mounts the backend source (`./backend:/app`) rather
+than running the copy baked into its image. Without the mount, Alembic misses revisions
+and model changes made since the last build, and a generated revision is written inside
+the container instead of on the host. Keep the virtual environment outside `/app`
+(`UV_PROJECT_ENVIRONMENT=/opt/venv`) so the mount does not hide it.
+
 **ALEM-5 — Write the message as a sentence-case summary of the change**, which becomes the
 file slug and the docstring:
 
