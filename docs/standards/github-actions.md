@@ -325,6 +325,11 @@ added backstops:
 
 None of these change the rule; they limit the damage if it is broken.
 
+Write access to a shared build cache is elevated access too: a PR job must not hold a
+credential that writes to a cache `main` reads from. `actions/cache` already scopes a
+PR's saves to the PR's own ref; a cache outside GitHub enforces it on the server
+(moon: [MCI-13](moonrepo/caching-and-ci.md)).
+
 ---
 
 ## Repository settings
