@@ -37,6 +37,15 @@ Pydantic, SQLAlchemy, Alembic, Beautiful Soup, NLTK, httpx, and pytest. The
 [relational-databases.md](relational-databases.md) and [postgresql.md](postgresql.md)
 rules apply to them too, except where a Python document names a rule it replaces.
 
+## moon
+
+Repositories that run their tasks with moon v2 follow the set in
+[moonrepo/](moonrepo/README.md): workspace and toolchains, projects and tasks, caching
+and CI, Docker and code generation, and the JavaScript and Python toolchains. It applies
+once a repository has a `.moon/workspace.yml`, and it names each rule in these documents
+that it replaces there (root scripts, CI change detection, the Dockerfile install
+pattern).
+
 ## Conventions used in these documents
 
 **Example domain.** Examples use one illustrative domain so they read consistently:
