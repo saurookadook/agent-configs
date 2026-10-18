@@ -186,6 +186,16 @@ arbitrary code" on their machines. The hooks guide says `moon sync hooks` and th
 index says `moon sync vcs-hooks`; this standard uses `vcs-hooks` until verified on the
 pinned version. Put the command in the onboarding docs.
 
+Gitignore `.moon/hooks/` _(judgement call, loosely held)_. The docs leave committing the
+generated scripts to each repository ("Whether or not you commit or ignore these script
+files is your choice"). `vcs.hooks` in `.moon/workspace.yml` is already the committed,
+reviewable source, and committing the generated copy only adds a file that must be
+regenerated whenever `vcs.hooks` changes, churns on moon upgrades, and differs on Windows
+(`.ps1`). A committed copy would not install anything either: `core.hooksPath` is local
+to each clone, so every developer still runs `moon sync vcs-hooks`. This choice is weakly
+held: revisit it if stronger evidence turns up, such as moon guidance that favours
+committing the scripts, or tooling that reviews or runs them from the repository.
+
 **MWS-18 — Do not install a second hook manager (Husky, lefthook) alongside moon's hooks**
 _(judgement call)_. moon points `core.hooksPath` at `.moon/hooks`, which takes the slot
 those tools use, and the docs never discuss coexistence.
