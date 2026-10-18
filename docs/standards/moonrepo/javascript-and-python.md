@@ -83,6 +83,9 @@ not fight the formatter.
 toolchain v2 still marks unstable. The default package manager is `pip`. A v2.1 blog
 example uses a bare `python:` key; the setup docs use `unstable_python`, and so does this
 standard. Treat the keys as provisional: re-check them on every moon upgrade (MWS-2).
+The configuration key and the toolchain ID differ: `.moon/toolchains.yml` takes
+`unstable_python`, but `inheritedBy.toolchains` matches the ID without the prefix,
+`python` (MLANG-10; checked on v2.6.2).
 
 **MLANG-9 — Install from the lockfile:**
 
@@ -106,7 +109,7 @@ Ruff and pyright are configured there (PY-8, PY-9):
 # .moon/tasks/python.yml
 $schema: '../cache/schemas/tasks.json'
 inheritedBy:
-  toolchains: ['unstable_python']
+  toolchains: ['python'] # the ID, not the `unstable_python` key (MLANG-8)
 fileGroups:
   python-sources: ['**/*.py', '!tests/**/*']
   python-tests: ['tests/**/*.py']
@@ -136,9 +139,11 @@ tasks:
 
 The task names match the JavaScript file, so `moon run :lint` and the pre-commit hook
 cover both languages. The group names carry a `python-` prefix so they do not merge with
-the JavaScript groups (MTASK-5). Verify on the pinned version that
-`inheritedBy.toolchains` matches `unstable_python` before relying on it; the docs have no
-example.
+the JavaScript groups (MTASK-5).
+
+- `inheritedBy.toolchains: ['unstable_python']` matches nothing on v2.6.2, so no project
+  inherits the tasks and `moon run :lint` silently skips Python. Use `['python']`, and
+  confirm with `moon task backend:lint` after a moon upgrade.
 
 **MLANG-11 — Create the shared venv before tasks fan out in parallel.** On a cold
 workspace, parallel `moon ci` can race on a shared root `.venv` ("A virtual environment

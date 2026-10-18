@@ -78,7 +78,7 @@ assumption; each is unverified until checked against the pinned version:
 | Docker skeleton directory     | `.moon/docker/workspace` vs `.moon/docker/configs`           | `configs`                                          | MDOCK-1   |
 | CI manual cache paths         | `{hashes,outputs}` vs `blobs/`, `manifests/`                 | use the remote cache instead                       | MCI-11    |
 | `setup-toolchain` cache key   | names v1 `.moon/toolchain.yml`                               | bump `cache-version` on toolchain edits            | MCI-4     |
-| Python key                    | `unstable_python` vs bare `python`                           | `unstable_python`                                  | MLANG-8   |
+| Python key                    | `unstable_python` vs bare `python`                           | `unstable_python` in toolchains; `python` in `inheritedBy` (checked v2.6.2) | MLANG-8   |
 | TS shared config name         | three different names                                        | TS-3's `tsconfig.common.json`                      | MLANG-6   |
 | Version precedence            | `toolchains.<id>.version` vs `.prototools`                   | `.prototools` only                                 | MWS-3     |
 
