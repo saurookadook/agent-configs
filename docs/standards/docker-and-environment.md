@@ -469,6 +469,18 @@ server {
 }
 ```
 
+Proxied locations pass the client's `Host` through as `$http_host`, not `$host`, which
+drops the port. Upstreams build absolute URLs (redirects, links) from `Host`, and not
+every server reads `X-Forwarded-Host` (Uvicorn ignores it), so with `$host` a redirect
+on a non-443 `PROXY_HTTPS_PORT` sends the browser to 443. The HTTP-to-HTTPS redirect above
+keeps `$host`, since the port it receives is the HTTP one.
+
+```nginx
+proxy_set_header Host              $http_host;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-Host  $http_host;
+```
+
 **ENV-39 — TLS certificates are generated or renewed by tooling, never committed.**
 Locally, a setup script runs `mkcert` into a git-ignored `certs/` directory. Never mount
 mkcert's `rootCA-key.pem`; a Node container that calls the proxy over HTTPS gets
