@@ -176,7 +176,7 @@ onboarding runs `moon sync config-schemas` after a fresh clone.
 ## VCS hooks
 
 **MWS-16 — The pre-commit hook runs `moon run :lint :format --affected --status=staged`**,
-the docs' recommended command, against tasks that set `options.affectedFiles: true`
+the docs' recommended command, against tasks that set `options.affectedFiles`
 (MTASK-6). Hook commands run from the repository root, so `moon` must be on `PATH`.
 
 **MWS-17 — Keep `vcs.sync: false`; each developer installs hooks with

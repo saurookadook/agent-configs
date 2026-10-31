@@ -107,7 +107,9 @@ tasks:
     deps: ['^:build']
     inputs: ['@group(sources)', '@group(tests)', '@group(configs)', '/.oxlintrc.json']
     options:
-      affectedFiles: true
+      affectedFiles:
+        pass: 'args'
+        filter: ['**/*.{ts,tsx,js,jsx,mjs,cjs}'] # MTASK-6
   typecheck:
     command: 'tsc'
     args: ['--build']
@@ -152,7 +154,21 @@ sequence.
 with no inputs defaults to every file in the project (`**/*`), or, by another page's
 account, always runs; either way its hash is wrong. Reference workspace-level files
 (`.oxlintrc.json`, a root tsconfig) with a leading `/`. Tasks used by the pre-commit hook
-set `options.affectedFiles: true`.
+set `options.affectedFiles`.
+
+`affectedFiles: true` passes every affected file that matches the inputs, config files
+included, so a commit that touches only a config file hands the tool that file alone.
+When the tool cannot take every input type, set `affectedFiles.filter` to the files it
+accepts (globs start with `**`). Config files stay inputs, so they still invalidate the
+cache, and when nothing passes the filter moon passes `.` (`passDotWhenNoResults`) and
+the tool checks the whole project, which is right after a config change. Verified on
+v2.6.2:
+
+- Ruff parses any file it is given as Python: `uv.lock` fails with hundreds of
+  `invalid-syntax` errors, so filter to `**/*.py` (MLANG-10). `pyproject.toml` happens
+  to pass.
+- oxlint given only `package.json` or `tsconfig.json` reports "No files found to lint"
+  and exits 1, so filter to JS/TS extensions. oxfmt formats JSON and needs no filter.
 
 **MTASK-7 — Inputs MUST NOT include an always-set environment variable** (`$CI`, `$HOME`)
 unless the result really depends on it. The docs warn that such a task "will always run

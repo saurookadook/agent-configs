@@ -119,13 +119,17 @@ tasks:
     args: ['run', 'ruff', 'format', '--check']
     inputs: ['@group(python-sources)', '@group(python-configs)']
     options:
-      affectedFiles: true
+      affectedFiles:
+        pass: 'args'
+        filter: ['**/*.py'] # Ruff reads uv.lock as Python (MTASK-6)
   lint:
     command: 'uv'
     args: ['run', 'ruff', 'check']
     inputs: ['@group(python-sources)', '@group(python-configs)']
     options:
-      affectedFiles: true
+      affectedFiles:
+        pass: 'args'
+        filter: ['**/*.py']
   typecheck:
     command: 'uv'
     args: ['run', 'pyright']
@@ -147,6 +151,9 @@ the JavaScript groups (MTASK-5).
   task's whole input list, so a group that excludes tests also drops them from a task that
   adds them back through another group, and their edits stop affecting `format` and
   `lint`. Narrow a group with positive globs only.
+- Filter the affected files passed to Ruff to `**/*.py`. `python-configs` is an input, so
+  with plain `affectedFiles: true` a commit that only updates dependencies passes
+  `uv.lock` to Ruff, which parses it as Python and fails the pre-commit hook (MTASK-6).
 
 **MLANG-11 — Create the shared venv before tasks fan out in parallel.** On a cold
 workspace, parallel `moon ci` can race on a shared root `.venv` ("A virtual environment
