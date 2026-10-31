@@ -1,0 +1,6 @@
+{
+  "name": "session-switcher",
+  "version": "0.1.0",
+  "description": "A pane listing every live Claude session on this Mac; click one to focus its terminal tab",
+  "types": "./types/index.d.ts"
+}
