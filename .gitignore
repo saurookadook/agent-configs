@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code mods: types the engine generates on load
+mods/*/.claude-plugin/types/

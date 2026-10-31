@@ -34,7 +34,13 @@ Write the message for each chunk against `COMMIT_CONVENTIONS.md`, not against ha
 
 ### 5. Show the plan
 
-Present the ordered list — subject line plus the paths (or hunks) it covers — and wait for the user to approve or adjust it.
+Present the ordered list — subject line plus the paths (or hunks) it covers. Then, in the same turn, request the grant, with N the number of commits in the plan:
+
+```
+~/.claude/hooks/git-grant.sh commit N
+```
+
+Run it exactly as written, alone. Its permission prompt is the user's approval of the plan: approved, it lets the `block-git-writes` hook pass those N `git commit` commands without asking again. Denied, the user wants changes: revise the plan, show it again, and request a fresh grant. `--amend` and `--no-verify` are never covered, and neither is any other git write. The grant ends at the user's next message.
 
 ### 6. Commit
 
