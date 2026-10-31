@@ -150,7 +150,9 @@ ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO app;
 ```
 
-Passwords come from secret files, as in ENV-13. The test database also grants `TRUNCATE`
+Passwords come from secret files, as in ENV-13. The image's entrypoint and init
+scripts read them as the `postgres` user, so the `postgres` service mounts the
+`secrets-init` copies at `/run/secrets` rather than Compose secrets. The test database also grants `TRUNCATE`
 on tables to `app`, so the test reset helper can run (DRIZZLE-33).
 
 ---

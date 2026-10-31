@@ -169,6 +169,18 @@ from files the setup script generates under `.docker/secrets/`. An init script i
 `/docker-entrypoint-initdb.d/` creates an app user with `readWrite` on `DB_NAME` only. The
 backend connects as that user; root is for administration.
 
+A secret or key read by a container that does not run as root MUST reach it through a
+one-shot `secrets-init` service, not a bind mount or a Compose file secret. The setup
+script writes these files `0600` for the host user, and on native Linux a bind mount
+(which is all a Compose file secret is outside Swarm) keeps that owner, so a non-root
+reader gets "Permission denied"; Docker Desktop's file sharing hides the problem. The
+service runs as root with only `CHOWN`, `DAC_OVERRIDE`, and `FOWNER`, copies each file
+with `install -o <uid> -g <gid> -m 0400` into a named volume owned by the UID that reads
+it, and runs on every `up`, so a regenerated file replaces the old copy. Readers wait for
+it with `condition: service_completed_successfully` and mount the volume read-only.
+Never make a secret world-readable instead. A service that runs as root MAY keep using
+Compose secrets.
+
 ---
 
 ## Dockerfiles
@@ -460,7 +472,9 @@ server {
 **ENV-39 — TLS certificates are generated or renewed by tooling, never committed.**
 Locally, a setup script runs `mkcert` into a git-ignored `certs/` directory. Never mount
 mkcert's `rootCA-key.pem`; a Node container that calls the proxy over HTTPS gets
-`NODE_EXTRA_CA_CERTS` pointing at `rootCA.pem`. In production, a PaaS terminates TLS, or
+`NODE_EXTRA_CA_CERTS` pointing at `rootCA.pem`. mkcert writes the key `0600`, and
+`nginx-unprivileged` runs as UID 101, so the proxy reads the certificate and key from
+the `secrets-init` copy (ENV-13), never from a bind mount of `certs/`. In production, a PaaS terminates TLS, or
 the VPS edge renews via ACME (certbot or Caddy). Never renew certificates by hand.
 
 **ENV-40 — Frontend and backend code MUST NOT hard-code `localhost` URLs or ports.**
