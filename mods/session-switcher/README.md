@@ -22,8 +22,6 @@ claude --plugin-dir ~/devel/personal/agent-configs/mods/session-switcher
 
 The session watches the folder, so saving a file reloads the mod. Each session you want the pane in needs the flag; the pane then lists every live session, flag or not.
 
-Installing it for every session is adding a plugin, which MEIDS Policy 075 says needs GenAI Committee approval: file a GenAI Tool Review Request first.
-
 ## macOS permissions
 
 The first click asks to let your terminal control Terminal (or iTerm2): System Settings → Privacy & Security → Automation.
