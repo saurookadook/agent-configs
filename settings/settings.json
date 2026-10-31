@@ -1,10 +1,5 @@
 {
-    "theme": "dark",
-    "modelSettings": {
-        "claude-opus-5": {
-            "effortLevel": "medium"
-        }
-    },
+    "model": "opus[1m]",
     "hooks": {
         "PreToolUse": [
             {
@@ -15,7 +10,64 @@
                         "command": "~/.claude/hooks/block-git-writes.sh"
                     }
                 ]
+            },
+            {
+                "matcher": "AskUserQuestion|ExitPlanMode",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "bash \"$HOME/.claude/claude-toast.sh\" Ask",
+                        "timeout": 15,
+                        "async": true
+                    }
+                ]
+            }
+        ],
+        "Notification": [
+            {
+                "matcher": "permission_prompt|elicitation_dialog",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "bash \"$HOME/.claude/claude-toast.sh\" Input",
+                        "timeout": 15,
+                        "async": true
+                    }
+                ]
+            },
+            {
+                "matcher": "idle_prompt",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "bash \"$HOME/.claude/claude-toast.sh\" Idle",
+                        "timeout": 15,
+                        "async": true
+                    }
+                ]
+            }
+        ],
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "bash \"$HOME/.claude/claude-toast.sh\" Prompt",
+                        "timeout": 15,
+                        "async": true
+                    }
+                ]
             }
         ]
-    }
+    },
+    "modelSettings": {
+        "claude-opus-5": {
+            "effortLevel": "medium"
+        },
+        "claude-opus-5-5": {
+            "effortLevel": "medium"
+        }
+    },
+    "skipWorkflowUsageWarning": true,
+    "theme": "dark"
 }
