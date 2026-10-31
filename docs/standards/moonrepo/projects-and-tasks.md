@@ -48,6 +48,12 @@ tasks:
   `frontend` and `backend` and `library` for `shared`.
 - The docs mark `description` as required and index it for search.
 - `owner` names a team, not a person.
+- When Compose runs the dev servers ([docker-and-environment.md](../docker-and-environment.md)
+  ENV-6), the project defines no host `dev` task: the root project's `dev` starts the
+  stack. A host `vite` gets none of the `env_file` variables, and the proxy does not route
+  to it, so the task fails or serves a page nothing reaches. `moon run :dev` would also
+  start it beside the stack. Keep the `dev` task above only where the dev server runs on
+  the host.
 - Set `language` explicitly. A `language` condition in `inheritedBy` matches only an
   explicit value, never a detected one.
 - `stack` MAY be set. Check that `enforceLayerRelationships` still accepts the
