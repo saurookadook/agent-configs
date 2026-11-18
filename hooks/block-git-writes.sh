@@ -18,9 +18,20 @@
 # After showing its plan, the skill runs `~/.claude/hooks/git-grant.sh <skill> <count>`. This
 # script always answers `ask` for that command, so the plan is approved by a human clicking
 # approve, never by the model. The command then records a grant, and up to <count> of the
-# skill's subcommands (only those, and never --amend or --no-verify) pass without a prompt.
+# skill's subcommands (only those, and never --amend, --no-verify or a force push) pass without a prompt.
 # A grant is good for this session only, and only until the user's next message, so it cannot
 # carry forward. Anything it does not cover falls back to `ask`.
+#
+# SESSION OPT-OUT. Starting Claude Code with GIT_GUARDRAIL_ALLOW set lifts the guard for the
+# listed subcommands, for that session only: `GIT_GUARDRAIL_ALLOW=commit claude`, or
+# `GIT_GUARDRAIL_ALLOW=commit,push claude`. The hook reads the variable from the environment
+# Claude Code was launched with, so only the human at the shell can set it; a variable the
+# model exports inside a Bash command never reaches this script. The same limits as a grant
+# apply: --amend, --no-verify and a force push still ask, and so does any write not listed.
+# Most entries are a bare subcommand (`commit`, `push`, `merge`). Three name one way of creating
+# a branch and cover nothing else those subcommands do (see allow_pattern): `branch` is
+# `git branch <name>`, `checkout-b` is `git checkout -b`, and `switch-c` is `git switch -c`.
+# Deleting, renaming or force-resetting a branch (`-d`, `-m`, `-B`, `-C`) still asks.
 #
 # WHAT IT CANNOT DO. It is not a sandbox. A determined bypass (writing a wrapper script,
 # invoking git through another tool, writing a grant file with the Write tool) is out of scope,
@@ -29,6 +40,7 @@
 #
 # READS ARE NEVER TOUCHED: status, log, diff, show, blame, rev-parse, describe, ls-files,
 # fetch, remote -v, config --get, worktree list, and `git checkout -- <named file>` all pass.
+# So does every listing form of `git branch` (see branch_writes).
 
 set -uo pipefail
 
@@ -117,12 +129,58 @@ GIT_WRITE='(^|[;&|(]|&&|\|\|)[[:space:]]*(sudo[[:space:]]+)?git([[:space:]]+-[^[
 
 BLOCKED_SUBCOMMANDS='(commit|push|reset|revert|rebase|merge|tag|stash|cherry-pick|am|apply|rm|mv|filter-branch|gc|prune|reflog[[:space:]]+delete|update-ref|symbolic-ref|fast-import|replace|notes[[:space:]]+(add|remove|edit))'
 
+# Prints one line for each `git branch` invocation in $1 that names a branch outside a listing:
+# `plain` when it carries no option (`git branch foo`, `git branch foo main`), and `flagged` when
+# it carries one (`git branch -f foo`, `git branch -u origin/foo`, `git branch foo -D`).
+#
+# `git branch` is a read far more often than a write, so a listing must never trip the guard. An
+# invocation counts as a listing when it has a listing option (`-a`, `--list`, `--contains` ...)
+# or names nothing at all (`git branch`, `git branch --show-current`).
+branch_writes() {
+  local args word named flagged listing
+  local -a words
+
+  printf '%s\n' "$1" \
+    | grep -oE "${GIT_WRITE}branch([[:space:]]+[^;&|()[:space:]]+)*" \
+    | awk '{ seen = 0; out = ""; for (i = 1; i <= NF; i++) { if (seen) out = out " " $i; else if ($i == "branch") seen = 1 } print out }' \
+    | while IFS= read -r args; do
+        [ -z "${args// /}" ] && continue
+
+        named=0 flagged=0 listing=0
+        read -ra words <<< "$args"
+
+        for word in "${words[@]}"; do
+          if [[ "$word" == *'<'* || "$word" == *'>'* ]]; then
+            : # a redirection such as 2>/dev/null, not an argument
+          elif [[ "$word" =~ ^-[arlvq]+$ ]] \
+            || [[ "$word" =~ ^--(all|remotes|list|verbose|show-current|color|no-color|column|no-column|abbrev|no-abbrev|ignore-case)(=.*)?$ ]] \
+            || [[ "$word" =~ ^--(contains|no-contains|merged|no-merged|points-at|format|sort)(=.*)?$ ]]; then
+            listing=1
+          elif [[ "$word" == -* ]]; then
+            flagged=1
+          else
+            named=1
+          fi
+        done
+
+        if [ "$listing" -eq 0 ] && [ "$named" -eq 1 ]; then
+          [ "$flagged" -eq 1 ] && echo flagged || echo plain
+        fi
+      done
+}
+
 # Prints why the command in $1 needs approval, or nothing if it does not.
 find_reason() {
   local text="$1" reason=""
 
   if printf '%s' "$text" | grep -qE "${GIT_WRITE}${BLOCKED_SUBCOMMANDS}([[:space:]]|$)"; then
     reason="it writes git history or moves a ref"
+  fi
+
+  # Plain `git branch <name>`, which no flag gives away. Checked first so that the more specific
+  # reasons below replace it.
+  if [ -n "$(branch_writes "$text")" ]; then
+    reason="it creates or changes a branch"
   fi
 
   # Branch and checkout are read AND write depending on the flag, so they are judged separately.
@@ -153,6 +211,57 @@ if [ -z "$REASON" ]; then
   exit 0
 fi
 
+# Succeeds when every git write in the command is one of the subcommands in $1 (a regex
+# alternation such as `commit|push`) and none of them amends, skips hooks or forces. Prints how
+# many such writes the command makes.
+count_covered() {
+  local allowed="$1" scrubbed uses
+
+  # Blank out the covered invocations; whatever is left must need no approval at all.
+  scrubbed=$(printf '%s' "$NORMALIZED" | sed -E "s/${GIT_WRITE}(${allowed})([[:space:]]|$)/\1 granted-write\5/g")
+  uses=$(printf '%s' "$NORMALIZED" | grep -oE "${GIT_WRITE}(${allowed})([[:space:]]|$)" | wc -l | tr -d ' ')
+
+  [ -z "$(find_reason "$scrubbed")" ] && [ "$uses" -ge 1 ] || return 1
+
+  # A `git branch` that names a branch AND carries an option is never covered: the option may
+  # sit after the name (`git branch foo -D`), where blanking out `branch foo` would hide it.
+  if branch_writes "$NORMALIZED" | grep -q flagged; then
+    return 1
+  fi
+
+  if printf '%s' "$NORMALIZED" | grep -qE '(^|[[:space:]])(--amend|--no-verify|-n|--force|--force-with-lease|--force-if-includes|-f)([[:space:]=]|$)'; then
+    return 1
+  fi
+
+  printf '%s' "$uses"
+}
+
+# Turns one GIT_GUARDRAIL_ALLOW entry into the regex for the invocation it covers. The branch
+# entries are narrower than their subcommand: each covers creating a branch and nothing else.
+# No pattern may contain a capture group, because count_covered counts groups in its sed.
+allow_pattern() {
+  case "$1" in
+    branch) printf '%s' 'branch[[:space:]]+[^-[:space:]][^[:space:]]*' ;;
+    checkout-b) printf '%s' 'checkout[[:space:]]+-b' ;;
+    switch-c) printf '%s' 'switch[[:space:]]+-c' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# Session opt-out: the user launched this session with the guard lifted for some subcommands.
+# The value is checked strictly because it becomes part of a regex.
+if [[ "${GIT_GUARDRAIL_ALLOW:-}" =~ ^[a-z-]+(,[a-z-]+)*$ ]]; then
+  SESSION_ALLOWED=""
+
+  for ENTRY in ${GIT_GUARDRAIL_ALLOW//,/ }; do
+    SESSION_ALLOWED="${SESSION_ALLOWED:+${SESSION_ALLOWED}|}$(allow_pattern "$ENTRY")"
+  done
+
+  if count_covered "$SESSION_ALLOWED" >/dev/null; then
+    decide allow "GIT GUARDRAIL: allowed, because this session was started with GIT_GUARDRAIL_ALLOW=${GIT_GUARDRAIL_ALLOW}."
+  fi
+fi
+
 # Spending a grant. Every condition must hold, or the command falls through to `ask`.
 if [ -f "$GRANT_FILE" ]; then
   G_SKILL=$(sed -n 's/^skill=//p' "$GRANT_FILE")
@@ -164,13 +273,7 @@ if [ -f "$GRANT_FILE" ]; then
   if [ -z "$LAST_HUMAN" ] || [[ "$LAST_HUMAN" > "$G_AT" ]]; then
     rm -f "$GRANT_FILE"
   elif ALLOWED=$(skill_allows "$G_SKILL"); then
-    # Blank out the granted invocations; whatever is left must need no approval at all.
-    SCRUBBED=$(printf '%s' "$NORMALIZED" | sed -E "s/${GIT_WRITE}(${ALLOWED})([[:space:]]|$)/\1 granted-write\5/g")
-    USES=$(printf '%s' "$NORMALIZED" | grep -oE "${GIT_WRITE}(${ALLOWED})([[:space:]]|$)" | wc -l | tr -d ' ')
-
-    if [ -z "$(find_reason "$SCRUBBED")" ] \
-      && [ "$USES" -ge 1 ] && [ "$USES" -le "${G_LEFT:-0}" ] \
-      && ! printf '%s' "$NORMALIZED" | grep -qE '(^|[[:space:]])(--amend|--no-verify|-n)([[:space:]=]|$)'; then
+    if USES=$(count_covered "$ALLOWED") && [ "$USES" -le "${G_LEFT:-0}" ]; then
       LEFT=$((G_LEFT - USES))
 
       if [ "$LEFT" -le 0 ]; then
