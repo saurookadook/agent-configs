@@ -57,6 +57,7 @@ GRANT_FILE="$HOME/.claude/state/git-grants/${SESSION_ID:-none}"
 skill_allows() {
   case "$1" in
     commit) echo 'commit' ;;
+    review-gh-pr-feedback) echo 'commit|push' ;;
     resolve-merge-conflicts) echo 'commit' ;;
     *) return 1 ;;
   esac
