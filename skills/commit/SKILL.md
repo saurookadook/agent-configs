@@ -34,7 +34,27 @@ Write the message for each chunk against `COMMIT_CONVENTIONS.md`, not against ha
 
 ### 5. Show the plan
 
-Present the ordered list — subject line plus the paths (or hunks) it covers. Then, in the same turn, request the grant, with N the number of commits in the plan:
+Present the plan as one numbered list, in commit order. Each item starts with the commit's subject line in backticks. If the commit has a body, put the body under the item in a `text` code block, exactly as it will be committed. End the item with the paths (or hunks) it covers:
+
+~~~md
+1. `feat(frontend): add the contact fields to the create form`
+
+   ```text
+   The body, word for word as it will be committed.
+   ```
+
+   Paths: `frontend/src/a.ts`, `frontend/src/b.tsx`
+2. `refactor(backend): share the phone pattern`
+
+   Paths: `backend/api/models/tickets.py`
+3. `chore: bump the lockfile`
+
+   Paths: `pnpm-lock.yaml`
+~~~
+
+A commit with no body has no code block. Do not summarize a body ("the body says why"). Show the text itself.
+
+Then, in the same turn, request the grant, with N the number of commits in the plan:
 
 ```
 ~/.claude/hooks/git-grant.sh commit N
@@ -44,7 +64,14 @@ Run it exactly as written, alone. Its permission prompt is the user's approval o
 
 ### 6. Commit
 
-For each chunk in order: stage exactly its paths (`git add -p` where a file splits across commits), confirm `git diff --staged` matches the plan, then commit.
+For each chunk in order: stage exactly its paths, confirm `git diff --staged` matches the plan, then commit with the message exactly as the plan showed it. If a message must change after approval, stop, show the new message, and request a fresh grant.
+
+Interactive staging (`git add -p`, `git add -i`) does not work here, because nothing can answer its prompts. When a file splits across commits, stage a prepared copy of the file instead, and leave the working-tree file as it is:
+
+1. Write the file as it must be after this commit to a scratch path. Start from `git show HEAD:<path>` and apply only this chunk's hunks.
+2. Store the copy: `blob=$(git hash-object -w <scratch-path>)`.
+3. Stage it: `git update-index --cacheinfo 100644,$blob,<path>`. Use `100755` for an executable file.
+4. Confirm with `git diff --staged -- <path>` that only this chunk's hunks are staged. Then confirm with `git diff -- <path>` that the later chunks' hunks are still unstaged.
 
 Leave everything outside the plan unstaged and untouched.
 
