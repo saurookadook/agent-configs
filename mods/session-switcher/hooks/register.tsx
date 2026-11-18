@@ -23,6 +23,39 @@ const GLYPHS: Record<string, Look> = {
 }
 const UNKNOWN: Look = { glyph: '·', dim: true }
 
+// The keys that work while the pane holds the keyboard (ctrl+x tab). `items`
+// is by row: its first key focuses row 1. Rows past its end get no key.
+export type Keymap = { previous: string; next: string; items: readonly string[] }
+
+// Bare keys nothing else binds while a pane has the keyboard; j, k, g, b, q
+// and x are left alone, as the transcript and footer views use them.
+export const DEFAULT_KEYMAP: Keymap = {
+  previous: 'p',
+  next: 'n',
+  items: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+}
+
+// What the engine would refuse or silently resolve: a Button's hotkey is one
+// digit or lowercase letter, and of two Buttons on one key the later wins.
+export function keymapProblems(keymap: Keymap): string[] {
+  const problems: string[] = []
+  const seen = new Set<string>()
+  for (const key of [keymap.previous, keymap.next, ...keymap.items]) {
+    if (!/^[0-9a-z]$/.test(key)) problems.push(`"${key}" is not one digit or lowercase letter`)
+    else if (seen.has(key)) problems.push(`"${key}" is bound twice`)
+    seen.add(key)
+  }
+
+  return problems
+}
+
+// The one place the keys come from. To make them configurable: declare the
+// fields under `userConfig` in plugin.json, read them from `options` here, and
+// fall back to the defaults when `keymapProblems` reports any.
+export function resolveKeymap(_options?: unknown): Keymap {
+  return DEFAULT_KEYMAP
+}
+
 // JXA, for the CoreGraphics window list. Raising a window on another Space
 // sometimes leaves the Space where it is while reporting success, and a
 // second attempt lands, so it checks and retries once. Terminal's window id
@@ -140,9 +173,24 @@ export function toRows(files: RegistryFile[], live: Map<number, Live>, self?: st
     })
   }
 
+  // By name, so a row's number stays put while sessions turn busy and idle;
+  // the id settles two sessions that share a name.
   return rows.sort(
-    (a, b) => Number(b.status === 'busy') - Number(a.status === 'busy') || a.startedAt - b.startedAt,
+    (a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }) ||
+      a.sessionId.localeCompare(b.sessionId),
   )
+}
+
+// The row `step` places from this session's own, wrapping at both ends. With
+// no row of its own, down starts at the top and up at the bottom.
+export function neighbor(rows: SessionRow[], step: -1 | 1): SessionRow | undefined {
+  if (rows.length === 0) return undefined
+  const self = rows.findIndex(row => row.isSelf)
+  if (self < 0) return step === 1 ? rows[0] : rows[rows.length - 1]
+  if (rows.length === 1) return undefined
+
+  return rows[(self + step + rows.length) % rows.length]
 }
 
 async function refresh($: EngineInterface) {
@@ -221,7 +269,15 @@ async function focus($: EngineInterface, row: SessionRow) {
   }
 }
 
-export const register: Register = on => {
+async function focusNeighbor($: EngineInterface, rows: SessionRow[], step: -1 | 1) {
+  const row = neighbor(rows, step)
+  if (row) await focus($, row)
+  else $.ui.toast('No other session to switch to')
+}
+
+export const register: Register = (on, options) => {
+  const keymap = resolveKeymap(options)
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({
@@ -273,7 +329,7 @@ export const register: Register = on => {
             <Button
               key={row.sessionId}
               plain
-              hotkey={index < 9 ? String(index + 1) : undefined}
+              hotkey={keymap.items[index]}
               onPress={() => focus($, row)}
             >
               <Text color={look.color} dimColor={look.dim}>
@@ -284,6 +340,17 @@ export const register: Register = on => {
             </Button>
           )
         })}
+        {rows.length > 0 && (
+          <Box>
+            <Button key="previous" plain hotkey={keymap.previous} onPress={() => focusNeighbor($, rows, -1)}>
+              up
+            </Button>
+            <Text>{'  '}</Text>
+            <Button key="next" plain hotkey={keymap.next} onPress={() => focusNeighbor($, rows, 1)}>
+              down
+            </Button>
+          </Box>
+        )}
       </Box>
     )
   })
