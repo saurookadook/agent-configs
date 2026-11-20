@@ -57,8 +57,9 @@ GRANT_FILE="$HOME/.claude/state/git-grants/${SESSION_ID:-none}"
 skill_allows() {
   case "$1" in
     commit) echo 'commit' ;;
-    review-gh-pr-feedback) echo 'commit|push' ;;
+    gh-pr-feedback) echo 'commit|push' ;;
     resolve-merge-conflicts) echo 'commit' ;;
+    review-gh-pr-feedback) echo 'commit|push' ;;
     *) return 1 ;;
   esac
 }
@@ -100,7 +101,9 @@ if printf '%s' "$COMMAND" | grep -qE 'git-grant|state/git-grants'; then
     *) decide deny "GIT GUARDRAIL: a grant for /$SKILL can only be requested during a run of /$SKILL that the user started." ;;
   esac
 
-  decide ask "GIT GUARDRAIL: approving this approves the plan above. /$SKILL may then run $COUNT \`git $(skill_allows "$SKILL")\` command(s) without asking again, until your next message. Deny it to change the plan."
+  ALLOWED=$(skill_allows "$SKILL")
+
+  decide ask "GIT GUARDRAIL: approving this approves the plan above. /$SKILL may then run $COUNT \`git ${ALLOWED//|/\` or \`git }\` command(s) without asking again, until your next message. Deny it to change the plan."
 fi
 
 # Strip git's GLOBAL options before matching, so a flag that takes a value cannot hide the
@@ -275,7 +278,12 @@ if [ -f "$GRANT_FILE" ]; then
   if [ -z "$LAST_HUMAN" ] || [[ "$LAST_HUMAN" > "$G_AT" ]]; then
     rm -f "$GRANT_FILE"
   elif ALLOWED=$(skill_allows "$G_SKILL"); then
-    if USES=$(count_covered "$ALLOWED") && [ "$USES" -le "${G_LEFT:-0}" ]; then
+    # A granted push is a plain one: no forcing, deleting, or pushing other refs, and no
+    # `+ref` (force) or `:ref` (delete) refspec.
+    UNSAFE_PUSH="${GIT_WRITE}push([[:space:]]+[^[:space:]]+)*[[:space:]]+(-f|-d|--force[^[:space:]]*|--delete|--mirror|--all|--tags|--prune|[+:][^[:space:]]*)([[:space:]=]|$)"
+
+    if USES=$(count_covered "$ALLOWED") && [ "$USES" -le "${G_LEFT:-0}" ] \
+      && ! printf '%s' "$NORMALIZED" | grep -qE "$UNSAFE_PUSH"; then
       LEFT=$((G_LEFT - USES))
 
       if [ "$LEFT" -le 0 ]; then
