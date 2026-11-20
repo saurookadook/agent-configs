@@ -18,7 +18,8 @@
 # After showing its plan, the skill runs `~/.claude/hooks/git-grant.sh <skill> <count>`. This
 # script always answers `ask` for that command, so the plan is approved by a human clicking
 # approve, never by the model. The command then records a grant, and up to <count> of the
-# skill's subcommands (only those, and never --amend, --no-verify or a force push) pass without a prompt.
+# skill's subcommands pass without a prompt: only those, never --amend or --no-verify, and
+# never a push that forces, deletes, or pushes more than the current branch.
 # A grant is good for this session only, and only until the user's next message, so it cannot
 # carry forward. Anything it does not cover falls back to `ask`.
 #
@@ -27,7 +28,8 @@
 # `GIT_GUARDRAIL_ALLOW=commit,push claude`. The hook reads the variable from the environment
 # Claude Code was launched with, so only the human at the shell can set it; a variable the
 # model exports inside a Bash command never reaches this script. The same limits as a grant
-# apply: --amend, --no-verify and a force push still ask, and so does any write not listed.
+# apply: --amend, --no-verify and a push that forces or deletes still ask, and so does any write
+# not listed.
 # Most entries are a bare subcommand (`commit`, `push`, `merge`). Three name one way of creating
 # a branch and cover nothing else those subcommands do (see allow_pattern): `branch` is
 # `git branch <name>`, `checkout-b` is `git checkout -b`, and `switch-c` is `git switch -c`.
@@ -134,6 +136,10 @@ GIT_WRITE='(^|[;&|(]|&&|\|\|)[[:space:]]*(sudo[[:space:]]+)?git([[:space:]]+-[^[
 
 BLOCKED_SUBCOMMANDS='(commit|push|reset|revert|rebase|merge|tag|stash|cherry-pick|am|apply|rm|mv|filter-branch|gc|prune|reflog[[:space:]]+delete|update-ref|symbolic-ref|fast-import|replace|notes[[:space:]]+(add|remove|edit))'
 
+# A push that forces, deletes, or pushes more than the current branch. Neither a grant nor the
+# session opt-out ever covers one (see count_covered).
+UNSAFE_PUSH="${GIT_WRITE}push([[:space:]]+[^[:space:]]+)*[[:space:]]+(-f|-d|--force[^[:space:]]*|--delete|--mirror|--all|--tags|--prune|[+:][^[:space:]]*)([[:space:]=]|$)"
+
 # Prints one line for each `git branch` invocation in $1 that names a branch outside a listing:
 # `plain` when it carries no option (`git branch foo`, `git branch foo main`), and `flagged` when
 # it carries one (`git branch -f foo`, `git branch -u origin/foo`, `git branch foo -D`).
@@ -238,6 +244,12 @@ count_covered() {
     return 1
   fi
 
+  # A covered push is a plain one: no forcing, deleting, or pushing other refs, and no
+  # `+ref` (force) or `:ref` (delete) refspec.
+  if printf '%s' "$NORMALIZED" | grep -qE "$UNSAFE_PUSH"; then
+    return 1
+  fi
+
   printf '%s' "$uses"
 }
 
@@ -278,12 +290,7 @@ if [ -f "$GRANT_FILE" ]; then
   if [ -z "$LAST_HUMAN" ] || [[ "$LAST_HUMAN" > "$G_AT" ]]; then
     rm -f "$GRANT_FILE"
   elif ALLOWED=$(skill_allows "$G_SKILL"); then
-    # A granted push is a plain one: no forcing, deleting, or pushing other refs, and no
-    # `+ref` (force) or `:ref` (delete) refspec.
-    UNSAFE_PUSH="${GIT_WRITE}push([[:space:]]+[^[:space:]]+)*[[:space:]]+(-f|-d|--force[^[:space:]]*|--delete|--mirror|--all|--tags|--prune|[+:][^[:space:]]*)([[:space:]=]|$)"
-
-    if USES=$(count_covered "$ALLOWED") && [ "$USES" -le "${G_LEFT:-0}" ] \
-      && ! printf '%s' "$NORMALIZED" | grep -qE "$UNSAFE_PUSH"; then
+    if USES=$(count_covered "$ALLOWED") && [ "$USES" -le "${G_LEFT:-0}" ]; then
       LEFT=$((G_LEFT - USES))
 
       if [ "$LEFT" -le 0 ]; then
